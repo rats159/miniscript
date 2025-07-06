@@ -96,6 +96,11 @@ Statement_Node :: union {
 	Call_Statement_Node,
 	Function_Node,
 	Block_Statement,
+	Return_Node
+}
+
+Return_Node :: struct {
+	value: ^Expression_Node
 }
 
 Block_Statement :: struct {
@@ -197,6 +202,10 @@ parse_statement :: proc(parser: ^Parser) -> (_expr: ^Statement_Node, _err: Maybe
 		return parse_block(parser)
 	}
 
+	if match(parser, .Return) or_return {
+		return parse_return(parser)
+	}
+
 	return nil, Parser_Error {
 		type = .Not_A_Statement,
 		token = peek(parser) or_return,
@@ -205,6 +214,18 @@ parse_statement :: proc(parser: ^Parser) -> (_expr: ^Statement_Node, _err: Maybe
 			(peek(parser) or_return).str,
 		),
 	}
+}
+
+parse_return :: proc(parser: ^Parser) -> (_stmt: ^Statement_Node, _err: Maybe(Parser_Error)) {
+	expr := parse_expression(parser) or_return
+	node := new(Statement_Node)
+	node ^= Return_Node {
+		value = expr
+	}
+
+	_ = expect(parser, .Semicolon) or_return
+
+	return node, nil
 }
 
 parse_block :: proc(parser: ^Parser) -> (_stmt: ^Statement_Node, _err: Maybe(Parser_Error)) {
@@ -281,7 +302,7 @@ parse_if :: proc(parser: ^Parser) -> (_stmt: ^Statement_Node, _err: Maybe(Parser
 }
 
 is_valid_after_if :: proc(type: TokenType) -> bool {
-	return false // Soon!
+	return type == .Open_Curly || type == .Return
 }
 
 @(private = "file")

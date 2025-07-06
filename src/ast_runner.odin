@@ -16,7 +16,7 @@ Native_Function :: struct {
 		arguments: []Value,
 	) -> (
 		Value,
-		Maybe(Runtime_Error),
+		Runtime_Propagator,
 	),
 }
 
@@ -33,6 +33,16 @@ Runtime_Error_Type :: enum {
 	Divide_By_Zero,
 	Type_Error,
 	Undeclared_Variable,
+	Stack_Depth_Exceeded,
+}
+
+Runtime_Return :: struct {
+	value: Value,
+}
+
+Runtime_Propagator :: union {
+	Runtime_Error,
+	Runtime_Return,
 }
 
 Runtime_Error :: struct {
@@ -43,6 +53,7 @@ Runtime_Error :: struct {
 Interpreter :: struct {
 	global_vars:   Environment,
 	current_scope: ^Environment,
+	depth: u8,
 }
 
 Environment :: struct {
@@ -53,7 +64,7 @@ Environment :: struct {
 define :: proc(environment: ^Environment, name: string, val: Value) {
 	environment.variables[name] = val
 }
-
+ 
 read :: proc(environment: ^Environment, name: string) -> (Value, bool) {
 	val, found := environment.variables[name]
 	if found {
@@ -67,17 +78,29 @@ read :: proc(environment: ^Environment, name: string) -> (Value, bool) {
 	return nil, false
 }
 
-begin_scope :: proc(interpreter: ^Interpreter) {
+@require_results
+begin_scope :: proc(interpreter: ^Interpreter) -> Runtime_Propagator{
+	if interpreter.depth > 100 {
+		return Runtime_Error {
+			type = .Stack_Depth_Exceeded,
+			message = "Stack is too deep!"
+		} 
+	}
 	new_scope := new(Environment)
+	new_scope.variables = map[string]Value{}
 	new_scope.parent = interpreter.current_scope
 	interpreter.current_scope = new_scope
+
+	interpreter.depth += 1
+	return nil
 }
 
 end_scope :: proc(interpreter: ^Interpreter) {
 	old_scope := interpreter.current_scope.parent.?
 	delete(interpreter.current_scope.variables)
-	free(interpreter.current_scope)
+	free(interpreter.current_scope) 
 	interpreter.current_scope = old_scope
+	interpreter.depth -= 1
 }
 
 setup_natives :: proc(interpreter: ^Interpreter) {
@@ -88,7 +111,7 @@ setup_natives :: proc(interpreter: ^Interpreter) {
 			arguments: []Value,
 		) -> (
 			Value,
-			Maybe(Runtime_Error),
+			Runtime_Propagator,
 		) {
 			for arg in arguments {
 				fmt.print(arg)
@@ -100,7 +123,7 @@ setup_natives :: proc(interpreter: ^Interpreter) {
 	})
 }
 
-execute :: proc(program: Program_Node) -> (_err: Maybe(Runtime_Error)) {
+execute :: proc(program: Program_Node) -> (_err: Runtime_Propagator) {
 	interpreter: Interpreter
 	globals := Environment{}
 	interpreter.global_vars = globals
@@ -117,7 +140,7 @@ execute :: proc(program: Program_Node) -> (_err: Maybe(Runtime_Error)) {
 execute_statement :: proc(
 	interpreter: ^Interpreter,
 	statement: Statement_Node,
-) -> Maybe(Runtime_Error) {
+) -> Runtime_Propagator {
 	switch t in statement {
 	case Variable_Node:
 		return execute_variable_decl(interpreter, statement.(Variable_Node))
@@ -132,13 +155,19 @@ execute_statement :: proc(
 		return execute_function_declaration(interpreter, t)
 	case Block_Statement:
 		return execute_block(interpreter, t)
+	case Return_Node:
+		return execute_return(interpreter, t)
 	}
 
 	unreachable()
 }
 
-execute_block :: proc(interpreter: ^Interpreter, block: Block_Statement) -> Maybe(Runtime_Error) {
-	begin_scope(interpreter)
+execute_return :: proc(interpreter: ^Interpreter, node: Return_Node) -> Runtime_Propagator {
+	return Runtime_Return{value = evaluate(interpreter, node.value^) or_return}
+}
+
+execute_block :: proc(interpreter: ^Interpreter, block: Block_Statement) -> Runtime_Propagator {
+	begin_scope(interpreter) or_return
 	defer end_scope(interpreter)
 	for statement in block.body {
 		execute_statement(interpreter, statement^) or_return
@@ -150,7 +179,7 @@ execute_block :: proc(interpreter: ^Interpreter, block: Block_Statement) -> Mayb
 execute_function_declaration :: proc(
 	interpreter: ^Interpreter,
 	statement: Function_Node,
-) -> Maybe(Runtime_Error) {
+) -> Runtime_Propagator {
 	define(
 		interpreter.current_scope,
 		statement.name.str,
@@ -160,7 +189,7 @@ execute_function_declaration :: proc(
 	return nil
 }
 
-execute_if :: proc(interpreter: ^Interpreter, statement: If_Node) -> Maybe(Runtime_Error) {
+execute_if :: proc(interpreter: ^Interpreter, statement: If_Node) -> Runtime_Propagator {
 	cond := evaluate(interpreter, statement.condition^) or_return
 	if cond.(bool) {
 		execute_statement(interpreter, statement.body^) or_return
@@ -173,7 +202,7 @@ execute_if :: proc(interpreter: ^Interpreter, statement: If_Node) -> Maybe(Runti
 execute_variable_decl :: proc(
 	interpreter: ^Interpreter,
 	statement: Variable_Node,
-) -> Maybe(Runtime_Error) {
+) -> Runtime_Propagator {
 	define(
 		interpreter.current_scope,
 		statement.name,
@@ -186,7 +215,7 @@ execute_variable_decl :: proc(
 execute_assignment :: proc(
 	interpreter: ^Interpreter,
 	statement: Assignment_Node,
-) -> Maybe(Runtime_Error) {
+) -> Runtime_Propagator {
 	define(
 		interpreter.current_scope,
 		statement.name,
@@ -201,7 +230,7 @@ evaluate :: proc(
 	expr: Expression_Node,
 ) -> (
 	_res: Value,
-	_err: Maybe(Runtime_Error),
+	_err: Runtime_Propagator,
 ) {
 	switch t in expr {
 	case String_Node:
@@ -248,7 +277,7 @@ evaluate_call :: proc(
 	node: Call_Node,
 ) -> (
 	_res: Value,
-	_err: Maybe(Runtime_Error),
+	_err: Runtime_Propagator,
 ) {
 	callee := evaluate(interpreter, node.callee^) or_return
 	arguments := make([]Value, len(node.arguments))
@@ -301,9 +330,9 @@ call :: proc(
 	arguments: []Value,
 ) -> (
 	_res: Value,
-	_err: Maybe(Runtime_Error),
+	_err: Runtime_Propagator,
 ) {
-	begin_scope(interpreter)
+	begin_scope(interpreter) or_return
 	defer end_scope(interpreter)
 
 	for arg, i in arguments {
@@ -311,10 +340,15 @@ call :: proc(
 	}
 
 	for statement in callee.definition.body {
-		execute_statement(interpreter, statement^) or_return
+		propagated := execute_statement(interpreter, statement^)
+		if val, is_return := propagated.(Runtime_Return); is_return {
+			return val.value, nil
+		} else if propagated != nil {
+			return nil, propagated
+		}
 	}
 
-	return nil, nil 
+	return nil, nil
 }
 
 native_call :: proc(
@@ -323,7 +357,7 @@ native_call :: proc(
 	arguments: []Value,
 ) -> (
 	_res: Value,
-	_err: Maybe(Runtime_Error),
+	_err: Runtime_Propagator,
 ) {
 	return callee.native_proc(interpreter, arguments)
 }
@@ -337,7 +371,7 @@ evaluate_add :: proc(
 	node: Add_Node,
 ) -> (
 	_res: Value,
-	_err: Maybe(Runtime_Error),
+	_err: Runtime_Propagator,
 ) {
 	left := evaluate(interpreter, node.left^) or_return
 	right := evaluate(interpreter, node.right^) or_return
@@ -352,6 +386,8 @@ evaluate_add :: proc(
 		return left.(i64) + right.(i64), nil
 	case {f64, f64}:
 		return left.(f64) + right.(f64), nil
+	case {string, string}:
+		return strings.concatenate({left.(string), right.(string)}), nil
 	}
 
 	return nil, Runtime_Error {
@@ -365,7 +401,7 @@ evaluate_subtract :: proc(
 	node: Subtract_Node,
 ) -> (
 	_res: Value,
-	_err: Maybe(Runtime_Error),
+	_err: Runtime_Propagator,
 ) {
 	left := evaluate(interpreter, node.left^) or_return
 	right := evaluate(interpreter, node.right^) or_return
@@ -380,6 +416,10 @@ evaluate_subtract :: proc(
 		return left.(i64) - right.(i64), nil
 	case {f64, f64}:
 		return left.(f64) - right.(f64), nil
+	case {i64, f64}:
+		return f64(left.(i64)) - right.(f64), nil
+	case {f64, i64}:
+		return left.(f64) - f64(right.(i64)), nil
 	}
 
 	return nil, Runtime_Error {
@@ -392,7 +432,7 @@ evaluate_multiply :: proc(
 	node: Multiply_Node,
 ) -> (
 	_res: Value,
-	_err: Maybe(Runtime_Error),
+	_err: Runtime_Propagator,
 ) {
 	left := evaluate(interpreter, node.left^) or_return
 	right := evaluate(interpreter, node.right^) or_return
@@ -407,6 +447,10 @@ evaluate_multiply :: proc(
 		return left.(i64) * right.(i64), nil
 	case {f64, f64}:
 		return left.(f64) * right.(f64), nil
+	case {i64, f64}:
+		return f64(left.(i64)) * right.(f64), nil
+	case {f64, i64}:
+		return left.(f64) * f64(right.(i64)), nil
 	}
 
 	return nil, Runtime_Error {
@@ -419,7 +463,7 @@ evaluate_divide :: proc(
 	node: Divide_Node,
 ) -> (
 	_res: Value,
-	_err: Maybe(Runtime_Error),
+	_err: Runtime_Propagator,
 ) {
 	left := evaluate(interpreter, node.left^) or_return
 	right := evaluate(interpreter, node.right^) or_return
@@ -453,7 +497,7 @@ evaluate_negation :: proc(
 	node: Negation_Node,
 ) -> (
 	_res: Value,
-	_err: Maybe(Runtime_Error),
+	_err: Runtime_Propagator,
 ) {
 	value := evaluate(interpreter, node.operand^) or_return
 
@@ -477,7 +521,7 @@ evaluate_equality :: proc(
 	node: Equality_Node,
 ) -> (
 	_res: Value,
-	_err: Maybe(Runtime_Error),
+	_err: Runtime_Propagator,
 ) {
 	left := evaluate(interpreter, node.left^) or_return
 	right := evaluate(interpreter, node.right^) or_return
@@ -493,6 +537,10 @@ evaluate_equality :: proc(
 		return left.(i64) == right.(i64), nil
 	case {f64, f64}:
 		return left.(f64) == right.(f64), nil
+	case {f64, i64}:
+		return left.(f64) == f64(right.(i64)), nil
+	case {i64, f64}:
+		return f64(left.(i64)) == right.(f64), nil
 	case {bool, bool}:
 		return left.(bool) == right.(bool), nil
 	case {string, string}:
@@ -510,7 +558,7 @@ evaluate_less :: proc(
 	node: Less_Node,
 ) -> (
 	_res: Value,
-	_err: Maybe(Runtime_Error),
+	_err: Runtime_Propagator,
 ) {
 	left := evaluate(interpreter, node.left^) or_return
 	right := evaluate(interpreter, node.right^) or_return
@@ -539,7 +587,7 @@ evaluate_greater :: proc(
 	node: Greater_Node,
 ) -> (
 	_res: Value,
-	_err: Maybe(Runtime_Error),
+	_err: Runtime_Propagator,
 ) {
 	left := evaluate(interpreter, node.left^) or_return
 	right := evaluate(interpreter, node.right^) or_return
@@ -568,7 +616,7 @@ evaluate_less_equals :: proc(
 	node: Less_Equals_Node,
 ) -> (
 	_res: Value,
-	_err: Maybe(Runtime_Error),
+	_err: Runtime_Propagator,
 ) {
 	left := evaluate(interpreter, node.left^) or_return
 	right := evaluate(interpreter, node.right^) or_return
@@ -597,7 +645,7 @@ evaluate_greater_equals :: proc(
 	node: Greater_Equals_Node,
 ) -> (
 	_res: Value,
-	_err: Maybe(Runtime_Error),
+	_err: Runtime_Propagator,
 ) {
 	left := evaluate(interpreter, node.left^) or_return
 	right := evaluate(interpreter, node.right^) or_return
@@ -626,7 +674,7 @@ evaluate_read :: proc(
 	node: Variable_Read_Node,
 ) -> (
 	_res: Value,
-	_err: Maybe(Runtime_Error),
+	_err: Runtime_Propagator,
 ) {
 	value, declared := read(interpreter.current_scope, node.name)
 	if !declared {

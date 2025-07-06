@@ -1,7 +1,6 @@
-function go_bananas() {
-    print("IM GOING BANANAS");
+function fac(n) {
+    if n = 1 return 1;
+    return n * fac(n - 1);
 }
 
-go_bananas();
-go_bananas();
-go_bananas();
+print(fac(102));

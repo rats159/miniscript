@@ -33,8 +33,20 @@ print_stmt :: proc(stmt: Statement_Node, indent: int) {
 		print_function(type, indent)
 	case Block_Statement:
 		print_block(type, indent)
+	case Return_Node:
+		print_return(type, indent)
 	}
 
+}
+
+print_return :: proc(node: Return_Node, indent: int) {
+	indent_str := strings.repeat("    ", indent)
+	fmt.println("Return {")
+		fmt.printf("%s    ", indent_str)
+		print_expr(node.value^, indent + 1)
+
+	fmt.print(indent_str)
+	fmt.println("}")
 }
 
 print_block :: proc(block: Block_Statement, indent: int) {

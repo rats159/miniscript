@@ -39,6 +39,7 @@ TokenType :: enum {
 	If,
 	Else,
 	Function,
+	Return,
 	//
 	Identifier,
 }
@@ -81,6 +82,7 @@ keywords := map[string]TokenType {
 	"if"    = .If,
 	"else"  = .Else,
 	"function"  = .Function,
+	"return"  = .Return,
 }
 
 tokenize :: proc(code: string) -> (_val: []Token, _err: Maybe(Tokenizer_Error)) {
