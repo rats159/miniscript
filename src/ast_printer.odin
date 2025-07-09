@@ -117,6 +117,8 @@ print_assignment :: proc(var: Assignment_Node, indent: int) {
 print_expr :: proc(expr: Expression_Node, indent: int) {
 	switch type in expr {
 	//
+	case Collection_Literal_Node:
+		print_collection_literal(type, indent)
 	case Add_Node:
 		print_add(type, indent)
 	case Subtract_Node:
@@ -152,6 +154,17 @@ print_expr :: proc(expr: Expression_Node, indent: int) {
 	case Call_Node:
 		print_call(type, indent)
 	}
+}
+
+print_collection_literal :: proc(coll: Collection_Literal_Node, indent: int) {
+	indent_str := strings.repeat("    ", indent)
+	fmt.println("Collection Literal {")
+	for expr in coll.body {
+		fmt.printf("%s    ", indent_str)
+		print_expr(expr^, indent + 1)
+	}
+	fmt.print(indent_str)
+	fmt.println("}")
 }
 
 print_read :: proc(var: Variable_Read_Node, indent: int) {

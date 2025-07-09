@@ -20,6 +20,10 @@ Native_Function :: struct {
 	),
 }
 
+Collection :: struct {
+	body: [dynamic]Value
+}
+
 Value :: union {
 	i64,
 	bool,
@@ -27,9 +31,10 @@ Value :: union {
 	string,
 	Function,
 	Native_Function,
+	Collection
 }
 
-Runtime_Error_Type :: enum {
+Runtime_Error_Type :: enum { 
 	Divide_By_Zero,
 	Type_Error,
 	Undeclared_Variable,
@@ -53,7 +58,7 @@ Runtime_Error :: struct {
 Interpreter :: struct {
 	global_vars:   Environment,
 	current_scope: ^Environment,
-	depth: u8,
+	depth:         u8,
 }
 
 Environment :: struct {
@@ -64,7 +69,7 @@ Environment :: struct {
 define :: proc(environment: ^Environment, name: string, val: Value) {
 	environment.variables[name] = val
 }
- 
+
 read :: proc(environment: ^Environment, name: string) -> (Value, bool) {
 	val, found := environment.variables[name]
 	if found {
@@ -78,13 +83,10 @@ read :: proc(environment: ^Environment, name: string) -> (Value, bool) {
 	return nil, false
 }
 
-@require_results
-begin_scope :: proc(interpreter: ^Interpreter) -> Runtime_Propagator{
+@(require_results)
+begin_scope :: proc(interpreter: ^Interpreter) -> Runtime_Propagator {
 	if interpreter.depth > 100 {
-		return Runtime_Error {
-			type = .Stack_Depth_Exceeded,
-			message = "Stack is too deep!"
-		} 
+		return Runtime_Error{type = .Stack_Depth_Exceeded, message = "Stack is too deep!"}
 	}
 	new_scope := new(Environment)
 	new_scope.variables = map[string]Value{}
@@ -98,9 +100,40 @@ begin_scope :: proc(interpreter: ^Interpreter) -> Runtime_Propagator{
 end_scope :: proc(interpreter: ^Interpreter) {
 	old_scope := interpreter.current_scope.parent.?
 	delete(interpreter.current_scope.variables)
-	free(interpreter.current_scope) 
+	free(interpreter.current_scope)
 	interpreter.current_scope = old_scope
 	interpreter.depth -= 1
+}
+
+tostring :: proc(val: Value) -> string {
+	switch val in val {
+		case i64:
+			return fmt.aprint(val)
+		case f64:
+			return fmt.aprint(val)
+		case string:
+			return strings.clone(val)
+		case bool:
+			return strings.clone("true" if val else "false")
+		case Function:
+			return strings.clone("<function>")
+		case Native_Function:
+			return strings.clone("<native function>")
+		case Collection:
+			builder := strings.Builder{}
+			strings.write_byte(&builder, '[')
+			for expr, i in val.body {
+				str := tostring(expr)
+				strings.write_string(&builder, str)
+				delete(str)
+				if i < len(val.body) - 1 {
+					strings.write_string(&builder, ", ")
+				}
+			}
+			strings.write_byte(&builder, ']')
+			return strings.to_string(builder)
+	}
+	panic("<Invalid Type>")
 }
 
 setup_natives :: proc(interpreter: ^Interpreter) {
@@ -114,8 +147,10 @@ setup_natives :: proc(interpreter: ^Interpreter) {
 			Runtime_Propagator,
 		) {
 			for arg in arguments {
-				fmt.print(arg)
+				str := tostring(arg)
+				fmt.print(str)
 				fmt.print(" ")
+				delete(str)
 			}
 			fmt.println()
 			return nil, nil
@@ -225,6 +260,24 @@ execute_assignment :: proc(
 	return nil
 }
 
+evaluate_collection :: proc(
+	interpreter: ^Interpreter,
+	coll: Collection_Literal_Node,
+) -> (
+	_res: Value,
+	_err: Runtime_Propagator,
+) {
+	body := [dynamic]Value{}
+
+	for expr in coll.body {
+		append(&body, evaluate(interpreter, expr^) or_return)
+	}
+
+	return Collection{
+		body = body
+	}, nil
+}
+
 evaluate :: proc(
 	interpreter: ^Interpreter,
 	expr: Expression_Node,
@@ -241,6 +294,8 @@ evaluate :: proc(
 		return expr.(Float_Node).value, nil
 	case Bool_Node:
 		return expr.(Bool_Node).value, nil
+	case Collection_Literal_Node:
+		return evaluate_collection(interpreter, t)
 	case Variable_Read_Node:
 		return evaluate_read(interpreter, t)
 	case Add_Node:

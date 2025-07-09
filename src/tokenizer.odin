@@ -32,6 +32,8 @@ TokenType :: enum {
 	Close_Paren,
 	Open_Curly,
 	Close_Curly,
+	Open_Bracket,
+	Close_Bracket,
 	Semicolon,
 	Comma,
 	//
@@ -139,6 +141,10 @@ tokenize :: proc(code: string) -> (_val: []Token, _err: Maybe(Tokenizer_Error)) 
 			emit_token(&tokenizer, .Open_Curly) or_return
 		case '}':
 			emit_token(&tokenizer, .Close_Curly) or_return
+		case '[':
+			emit_token(&tokenizer, .Open_Bracket) or_return
+		case ']':
+			emit_token(&tokenizer, .Close_Bracket) or_return
 		case ';':
 			emit_token(&tokenizer, .Semicolon) or_return
 		case ',':

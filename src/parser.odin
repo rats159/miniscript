@@ -21,6 +21,10 @@ Program_Node :: struct {
 	body: []^Statement_Node,
 }
 
+Collection_Literal_Node :: struct {
+	body: []^Expression_Node
+}
+
 Expression_Node :: union {
 	//
 	Add_Node,
@@ -38,6 +42,7 @@ Expression_Node :: union {
 	Float_Node,
 	Bool_Node,
 	String_Node,
+	Collection_Literal_Node,
 	//
 	Variable_Read_Node,
 	Call_Node,
@@ -416,9 +421,31 @@ parse_operator_assignment :: proc(
 
 @(private = "file")
 parse_expression :: proc(parser: ^Parser) -> (_expr: ^Expression_Node, _err: Maybe(Parser_Error)) {
+	if match(parser, .Open_Bracket) or_return {
+		return parse_collection(parser)
+	}
 	expr := parse_comparison(parser) or_return
 
 	return expr, nil
+}
+
+@(private = "file")
+parse_collection :: proc(parser: ^Parser) -> (_expr: ^Expression_Node, _err: Maybe(Parser_Error)) {
+	body: [dynamic]^Expression_Node
+	if (peek(parser, 0) or_return).type != .Close_Bracket {
+		for {
+			append(&body, parse_expression(parser) or_return)
+			if !(match(parser, .Comma) or_return) do break
+		}
+	}
+ 
+	_ = expect(parser, .Close_Bracket) or_return
+	node := new(Expression_Node)
+	node ^= Collection_Literal_Node {
+		body = body[:]
+	}
+
+	return node, nil
 }
 
 @(private = "file")
