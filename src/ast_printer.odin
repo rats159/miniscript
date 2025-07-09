@@ -27,8 +27,8 @@ print_stmt :: proc(stmt: Statement_Node, indent: int) {
 		print_assignment(type, indent)
 	case If_Node:
 		print_if(type, indent)
-	case Call_Statement_Node:
-		print_call(type.call, indent)
+	case Void_Node:
+		print_void(type, indent)
 	case Function_Node:
 		print_function(type, indent)
 	case Block_Statement:
@@ -39,11 +39,21 @@ print_stmt :: proc(stmt: Statement_Node, indent: int) {
 
 }
 
+print_void :: proc(node: Void_Node, indent: int) {
+	indent_str := strings.repeat("    ", indent)
+	fmt.println("Void {")
+	fmt.printf("%s    ", indent_str)
+	print_expr(node.expr^, indent + 1)
+
+	fmt.print(indent_str)
+	fmt.println("}")
+}
+
 print_return :: proc(node: Return_Node, indent: int) {
 	indent_str := strings.repeat("    ", indent)
 	fmt.println("Return {")
-		fmt.printf("%s    ", indent_str)
-		print_expr(node.value^, indent + 1)
+	fmt.printf("%s    ", indent_str)
+	print_expr(node.value^, indent + 1)
 
 	fmt.print(indent_str)
 	fmt.println("}")
@@ -153,6 +163,8 @@ print_expr :: proc(expr: Expression_Node, indent: int) {
 		print_read(type, indent)
 	case Call_Node:
 		print_call(type, indent)
+	case Subscript_Node:
+		print_subscript(type, indent)
 	}
 }
 
@@ -210,6 +222,17 @@ print_call :: proc(node: Call_Node, indent: int) {
 		print_expr(argument^, indent + 2)
 	}
 	fmt.printfln("%s    ]", indent_str)
+	fmt.print(indent_str)
+	fmt.println("}")
+}
+
+print_subscript :: proc(node: Subscript_Node, indent: int) {
+	indent_str := strings.repeat("    ", indent)
+	fmt.println("Subscript {")
+	fmt.printf("%s    Operand: ", indent_str)
+	print_expr(node.operand^, indent + 1)
+	fmt.printf("%s    Indexer: ", indent_str)
+	print_expr(node.indexer^, indent + 1)
 	fmt.print(indent_str)
 	fmt.println("}")
 }

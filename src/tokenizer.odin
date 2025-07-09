@@ -3,7 +3,6 @@ package main
 
 import "base:runtime"
 import "core:fmt"
-import "core:mem"
 
 TokenType :: enum {
 	Invalid_Token,
@@ -36,6 +35,7 @@ TokenType :: enum {
 	Close_Bracket,
 	Semicolon,
 	Comma,
+	Tilde,
 	//
 	Var,
 	If,
@@ -95,9 +95,6 @@ tokenize :: proc(code: string) -> (_val: []Token, _err: Maybe(Tokenizer_Error)) 
 	}
 	tokenizer.tokens.allocator = runtime.default_allocator()
 
-	// Temporary to make sure I'm aware of every allocation
-	context.allocator = mem.panic_allocator()
-
 	for !done(&tokenizer) {
 		cc := current_char(&tokenizer) or_return
 
@@ -151,6 +148,8 @@ tokenize :: proc(code: string) -> (_val: []Token, _err: Maybe(Tokenizer_Error)) 
 			emit_token(&tokenizer, .Comma) or_return
 		case '=':
 			emit_token(&tokenizer, .Equals) or_return
+		case '~':
+			emit_token(&tokenizer, .Tilde) or_return
 		case:
 			fmt.printfln("Unknown char '%c'", cc)
 			return {}, Tokenizer_Error{type = .Unknown_Character, row = tokenizer.row + 1, col = tokenizer.col + 1, message = "Unknown character", char = cc}

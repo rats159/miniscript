@@ -21,7 +21,7 @@ Native_Function :: struct {
 }
 
 Collection :: struct {
-	body: [dynamic]Value
+	body: [dynamic]Value,
 }
 
 Value :: union {
@@ -31,14 +31,15 @@ Value :: union {
 	string,
 	Function,
 	Native_Function,
-	Collection
+	Collection,
 }
 
-Runtime_Error_Type :: enum { 
+Runtime_Error_Type :: enum {
 	Divide_By_Zero,
 	Type_Error,
 	Undeclared_Variable,
 	Stack_Depth_Exceeded,
+	Index_Out_Of_Bounds_Error,
 }
 
 Runtime_Return :: struct {
@@ -107,31 +108,31 @@ end_scope :: proc(interpreter: ^Interpreter) {
 
 tostring :: proc(val: Value) -> string {
 	switch val in val {
-		case i64:
-			return fmt.aprint(val)
-		case f64:
-			return fmt.aprint(val)
-		case string:
-			return strings.clone(val)
-		case bool:
-			return strings.clone("true" if val else "false")
-		case Function:
-			return strings.clone("<function>")
-		case Native_Function:
-			return strings.clone("<native function>")
-		case Collection:
-			builder := strings.Builder{}
-			strings.write_byte(&builder, '[')
-			for expr, i in val.body {
-				str := tostring(expr)
-				strings.write_string(&builder, str)
-				delete(str)
-				if i < len(val.body) - 1 {
-					strings.write_string(&builder, ", ")
-				}
+	case i64:
+		return fmt.aprint(val)
+	case f64:
+		return fmt.aprint(val)
+	case string:
+		return strings.clone(val)
+	case bool:
+		return strings.clone("true" if val else "false")
+	case Function:
+		return strings.clone("<function>")
+	case Native_Function:
+		return strings.clone("<native function>")
+	case Collection:
+		builder := strings.Builder{}
+		strings.write_byte(&builder, '[')
+		for expr, i in val.body {
+			str := tostring(expr)
+			strings.write_string(&builder, str)
+			delete(str)
+			if i < len(val.body) - 1 {
+				strings.write_string(&builder, ", ")
 			}
-			strings.write_byte(&builder, ']')
-			return strings.to_string(builder)
+		}
+		strings.write_byte(&builder, ']')
+		return strings.to_string(builder)
 	}
 	panic("<Invalid Type>")
 }
@@ -169,6 +170,7 @@ execute :: proc(program: Program_Node) -> (_err: Runtime_Propagator) {
 		execute_statement(&interpreter, statement^) or_return
 	}
 
+	delete(interpreter.global_vars.variables)
 	return nil
 }
 
@@ -183,8 +185,8 @@ execute_statement :: proc(
 		return execute_assignment(interpreter, statement.(Assignment_Node))
 	case If_Node:
 		return execute_if(interpreter, statement.(If_Node))
-	case Call_Statement_Node:
-		_, err := evaluate_call(interpreter, t.call)
+	case Void_Node:
+		_, err := evaluate(interpreter, t.expr^)
 		return err
 	case Function_Node:
 		return execute_function_declaration(interpreter, t)
@@ -273,9 +275,7 @@ evaluate_collection :: proc(
 		append(&body, evaluate(interpreter, expr^) or_return)
 	}
 
-	return Collection{
-		body = body
-	}, nil
+	return Collection{body = body}, nil
 }
 
 evaluate :: proc(
@@ -320,11 +320,44 @@ evaluate :: proc(
 		return evaluate_equality(interpreter, t)
 	case Call_Node:
 		return evaluate_call(interpreter, t)
+	case Subscript_Node:
+		return evaluate_subscript(interpreter, t)
 	case:
 		panic("Untyped node made it into execution. Was type checking skipped?")
 	}
 
 	unreachable()
+}
+
+evaluate_subscript :: proc(
+	interpreter: ^Interpreter,
+	node: Subscript_Node,
+) -> (
+	_res: Value,
+	_err: Runtime_Propagator,
+) {
+	source_value :=evaluate(interpreter, node.operand^) or_return
+	source, is_collection := source_value.(Collection)
+
+	if !is_collection {
+		return {}, Runtime_Error{type = .Type_Error, message = fmt.tprintf("Unable to subcript type %s", reflect.union_variant_typeid(source_value))}
+	}
+
+	index_value := evaluate(interpreter, node.indexer^) or_return
+	index, is_int := index_value.(i64)
+
+	if !is_int {
+		return {}, Runtime_Error{type = .Type_Error, message = fmt.tprintf("Unable to index with type %s", reflect.union_variant_typeid(index_value))}
+	}
+
+	if index < 0 || index >= i64(len(source.body)) {
+		return {}, Runtime_Error{
+			type = .Index_Out_Of_Bounds_Error,
+			message = fmt.tprintf("Index %d is not between 0 and %d", index, len(source.body))
+		}
+	}
+
+	return source.body[index], nil
 }
 
 evaluate_call :: proc(
