@@ -22,6 +22,7 @@ TokenType :: enum {
 	StarEquals,
 	SlashEquals,
 	Equals,
+	EqualsEquals,
 	Less,
 	Greater,
 	LessEquals,
@@ -35,7 +36,6 @@ TokenType :: enum {
 	Close_Bracket,
 	Semicolon,
 	Comma,
-	Tilde,
 	//
 	Var,
 	If,
@@ -147,9 +147,7 @@ tokenize :: proc(code: string) -> (_val: []Token, _err: Maybe(Tokenizer_Error)) 
 		case ',':
 			emit_token(&tokenizer, .Comma) or_return
 		case '=':
-			emit_token(&tokenizer, .Equals) or_return
-		case '~':
-			emit_token(&tokenizer, .Tilde) or_return
+			emit_token_or_postfixed(&tokenizer, .Equals, '=', .EqualsEquals) or_return
 		case:
 			fmt.printfln("Unknown char '%c'", cc)
 			return {}, Tokenizer_Error{type = .Unknown_Character, row = tokenizer.row + 1, col = tokenizer.col + 1, message = "Unknown character", char = cc}

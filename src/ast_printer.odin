@@ -10,43 +10,13 @@ print_tree :: proc(root: Program_Node) {
 	context.allocator = mem.dynamic_arena_allocator(&arena)
 
 	fmt.println("Program {")
-	for statement in root.body {
+	for expression in root.body {
 		fmt.print("    ")
-		print_stmt(statement^, 1)
+		print_expr(expression^, 1)
 	}
 	fmt.println("}")
 
 	free_all()
-}
-
-print_stmt :: proc(stmt: Statement_Node, indent: int) {
-	switch type in stmt {
-	case Variable_Node:
-		print_variable(type, indent)
-	case Assignment_Node:
-		print_assignment(type, indent)
-	case If_Node:
-		print_if(type, indent)
-	case Void_Node:
-		print_void(type, indent)
-	case Function_Node:
-		print_function(type, indent)
-	case Block_Statement:
-		print_block(type, indent)
-	case Return_Node:
-		print_return(type, indent)
-	}
-
-}
-
-print_void :: proc(node: Void_Node, indent: int) {
-	indent_str := strings.repeat("    ", indent)
-	fmt.println("Void {")
-	fmt.printf("%s    ", indent_str)
-	print_expr(node.expr^, indent + 1)
-
-	fmt.print(indent_str)
-	fmt.println("}")
 }
 
 print_return :: proc(node: Return_Node, indent: int) {
@@ -59,12 +29,12 @@ print_return :: proc(node: Return_Node, indent: int) {
 	fmt.println("}")
 }
 
-print_block :: proc(block: Block_Statement, indent: int) {
+print_block :: proc(block: Block, indent: int) {
 	indent_str := strings.repeat("    ", indent)
 	fmt.println("Block {")
 	for stmt in block.body {
 		fmt.printf("%s    ", indent_str)
-		print_stmt(stmt^, indent + 1)
+		print_expr(stmt^, indent + 1)
 	}
 	fmt.print(indent_str)
 	fmt.println("}")
@@ -82,7 +52,7 @@ print_function :: proc(func: Function_Node, indent: int) {
 	fmt.printfln("%s    Body: [", indent_str)
 	for stmt in func.body {
 		fmt.printf("%s        ", indent_str)
-		print_stmt(stmt^, indent + 2)
+		print_expr(stmt^, indent + 2)
 	}
 	fmt.printfln("%s    ]", indent_str)
 	fmt.print(indent_str)
@@ -91,14 +61,14 @@ print_function :: proc(func: Function_Node, indent: int) {
 
 print_if :: proc(stmt: If_Node, indent: int) {
 	indent_str := strings.repeat("    ", indent)
-	fmt.println("If Statement {")
+	fmt.println("If Expression {")
 	fmt.printf("%s    Condition: ", indent_str)
 	print_expr(stmt.condition^, indent + 1)
 	fmt.printf("\n%s    Body: ", indent_str)
-	print_stmt(stmt.body^, indent + 1)
+	print_expr(stmt.body^, indent + 1)
 	if els, ok := stmt.else_body.?; ok {
 		fmt.printf("\n%s    Else Body: ", indent_str)
-		print_stmt(els^, indent + 1)
+		print_expr(els^, indent + 1)
 	}
 	fmt.print(indent_str)
 	fmt.println("}")
@@ -117,7 +87,8 @@ print_variable :: proc(var: Variable_Node, indent: int) {
 print_assignment :: proc(var: Assignment_Node, indent: int) {
 	indent_str := strings.repeat("    ", indent)
 	fmt.println("Variable Assignment {")
-	fmt.printfln("%s    Name: %s", indent_str, var.name)
+	fmt.printfln("%s    Assignee: ", indent_str)
+	print_expr(var.assignee^, indent+2)
 	fmt.printf("%s    Value: ", indent_str)
 	print_expr(var.value^, indent + 1)
 	fmt.print(indent_str)
@@ -165,6 +136,19 @@ print_expr :: proc(expr: Expression_Node, indent: int) {
 		print_call(type, indent)
 	case Subscript_Node:
 		print_subscript(type, indent)
+	//
+	case Variable_Node:
+		print_variable(type, indent)
+	case Assignment_Node:
+		print_assignment(type, indent)
+	case If_Node:
+		print_if(type, indent)
+	case Function_Node:
+		print_function(type, indent)
+	case Block:
+		print_block(type, indent)
+	case Return_Node:
+		print_return(type, indent)
 	}
 }
 

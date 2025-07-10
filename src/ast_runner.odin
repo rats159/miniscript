@@ -40,6 +40,8 @@ Runtime_Error_Type :: enum {
 	Undeclared_Variable,
 	Stack_Depth_Exceeded,
 	Index_Out_Of_Bounds_Error,
+	Invalid_Assignment,
+	Redefinition,
 }
 
 Runtime_Return :: struct {
@@ -67,8 +69,35 @@ Environment :: struct {
 	variables: map[string]Value,
 }
 
-define :: proc(environment: ^Environment, name: string, val: Value) {
+@require_results
+define :: proc(environment: ^Environment, name: string, val: Value) -> Runtime_Propagator {
+	_, defined := &environment.variables[name]
+
+	if defined {
+		return Runtime_Error {
+			type = .Redefinition,
+			message = fmt.tprintf("Redefinition of variable %s", name)
+		}
+	}
+
 	environment.variables[name] = val
+	return nil
+}
+
+set :: proc(environment: ^Environment, name: string, val: Value) -> Runtime_Propagator {
+	_, found := environment.variables[name]
+	if found {
+		environment.variables[name] = val
+		return nil
+	}
+
+	if environment.parent != nil {
+		return set(environment.parent.?, name, val)
+	}
+
+	return Runtime_Error {
+		type = .Undeclared_Variable
+	}
 }
 
 read :: proc(environment: ^Environment, name: string) -> (Value, bool) {
@@ -137,7 +166,7 @@ tostring :: proc(val: Value) -> string {
 	panic("<Invalid Type>")
 }
 
-setup_natives :: proc(interpreter: ^Interpreter) {
+setup_natives :: proc(interpreter: ^Interpreter) -> Runtime_Propagator {
 	define(&interpreter.global_vars, "print", Native_Function {
 		arity = -1,
 		native_proc = proc(
@@ -156,7 +185,22 @@ setup_natives :: proc(interpreter: ^Interpreter) {
 			fmt.println()
 			return nil, nil
 		},
-	})
+	}) or_return
+
+		define(&interpreter.global_vars, "tostring", Native_Function {
+		arity = 1,
+		native_proc = proc(
+			interpreter: ^Interpreter,
+			arguments: []Value,
+		) -> (
+			Value,
+			Runtime_Propagator,
+		) {
+			return tostring(arguments[0]), nil
+		},
+	}) or_return
+
+	return nil
 }
 
 execute :: proc(program: Program_Node) -> (_err: Runtime_Propagator) {
@@ -165,101 +209,119 @@ execute :: proc(program: Program_Node) -> (_err: Runtime_Propagator) {
 	interpreter.global_vars = globals
 	interpreter.current_scope = &interpreter.global_vars
 
-	setup_natives(&interpreter)
-	for statement in program.body {
-		execute_statement(&interpreter, statement^) or_return
+	setup_natives(&interpreter) or_return
+	for expr in program.body {
+		evaluate(&interpreter, expr^) or_return
 	}
 
 	delete(interpreter.global_vars.variables)
 	return nil
 }
 
-execute_statement :: proc(
+evaluate_return :: proc(
 	interpreter: ^Interpreter,
-	statement: Statement_Node,
-) -> Runtime_Propagator {
-	switch t in statement {
-	case Variable_Node:
-		return execute_variable_decl(interpreter, statement.(Variable_Node))
-	case Assignment_Node:
-		return execute_assignment(interpreter, statement.(Assignment_Node))
-	case If_Node:
-		return execute_if(interpreter, statement.(If_Node))
-	case Void_Node:
-		_, err := evaluate(interpreter, t.expr^)
-		return err
-	case Function_Node:
-		return execute_function_declaration(interpreter, t)
-	case Block_Statement:
-		return execute_block(interpreter, t)
-	case Return_Node:
-		return execute_return(interpreter, t)
-	}
-
-	unreachable()
+	node: Return_Node,
+) -> (
+	_val: Value,
+	_prop: Runtime_Propagator,
+) {
+	return nil, Runtime_Return{value = evaluate(interpreter, node.value^) or_return}
 }
 
-execute_return :: proc(interpreter: ^Interpreter, node: Return_Node) -> Runtime_Propagator {
-	return Runtime_Return{value = evaluate(interpreter, node.value^) or_return}
-}
-
-execute_block :: proc(interpreter: ^Interpreter, block: Block_Statement) -> Runtime_Propagator {
+evaluate_block :: proc(
+	interpreter: ^Interpreter,
+	block: Block,
+) -> (
+	_val: Value,
+	_prop: Runtime_Propagator,
+) {
 	begin_scope(interpreter) or_return
 	defer end_scope(interpreter)
-	for statement in block.body {
-		execute_statement(interpreter, statement^) or_return
+	value: Value
+	for expr in block.body {
+		value = evaluate(interpreter, expr^) or_return
 	}
 
-	return nil
+	return value, nil
 }
 
-execute_function_declaration :: proc(
+evaluate_function_declaration :: proc(
 	interpreter: ^Interpreter,
-	statement: Function_Node,
-) -> Runtime_Propagator {
-	define(
-		interpreter.current_scope,
-		statement.name.str,
-		Function{arity = len(statement.parameters), definition = statement},
-	)
+	node: Function_Node,
+) -> (
+	_val: Value,
+	_prop: Runtime_Propagator,
+) {
+	func := Function {
+		arity      = len(node.parameters),
+		definition = node,
+	}
+	define(interpreter.current_scope, node.name.str, func) or_return
 
-	return nil
+	return func, nil
 }
 
-execute_if :: proc(interpreter: ^Interpreter, statement: If_Node) -> Runtime_Propagator {
-	cond := evaluate(interpreter, statement.condition^) or_return
+evaluate_if :: proc(
+	interpreter: ^Interpreter,
+	node: If_Node,
+) -> (
+	_val: Value,
+	_prop: Runtime_Propagator,
+) {
+	cond := evaluate(interpreter, node.condition^) or_return
+
+	#partial switch type in cond {
+		case bool:
+		case:
+			return nil, Runtime_Error {
+				type = .Type_Error,
+				message = fmt.tprintf("Tried to use type %s in an if condition", reflect.union_variant_typeid(cond))
+			}
+	}
+
 	if cond.(bool) {
-		execute_statement(interpreter, statement.body^) or_return
-	} else if els, ok := statement.else_body.?; ok {
-		execute_statement(interpreter, els^) or_return
+		return evaluate(interpreter, node.body^)
+	} else if els, ok := node.else_body.?; ok {
+		return evaluate(interpreter, els^)
 	}
-	return nil
+	return nil, nil
 }
 
-execute_variable_decl :: proc(
+evaluate_variable_decl :: proc(
 	interpreter: ^Interpreter,
-	statement: Variable_Node,
-) -> Runtime_Propagator {
-	define(
-		interpreter.current_scope,
-		statement.name,
-		evaluate(interpreter, statement.value^) or_return,
-	)
+	node: Variable_Node,
+) -> (
+	_val: Value,
+	_prop: Runtime_Propagator,
+) {
+	value := evaluate(interpreter, node.value^) or_return
+	define(interpreter.current_scope, node.name, value) or_return
 
-	return nil
+	return value, nil
 }
 
-execute_assignment :: proc(
+evaluate_assignment :: proc(
 	interpreter: ^Interpreter,
-	statement: Assignment_Node,
-) -> Runtime_Propagator {
-	define(
-		interpreter.current_scope,
-		statement.name,
-		evaluate(interpreter, statement.value^) or_return,
-	)
+	node: Assignment_Node,
+) -> (
+	_val: Value,
+	_prop: Runtime_Propagator,
+) {
+	value: Value
+	#partial switch assignee in node.assignee^ {
+	case Variable_Read_Node:
+		value = evaluate(interpreter, node.value^) or_return
+		set(interpreter.current_scope, assignee.name, value) or_return
+	case:
+		return nil, Runtime_Error {
+			type = .Invalid_Assignment,
+			message = fmt.tprintf("Unable to assign to %s", reflect.union_variant_typeid(node.assignee^)),
+		}
+	}
+	// val := evaluate(interpreter, node.value^) or_return
+	// set(interpreter.current_scope, node.name, val)
 
-	return nil
+	return value, nil
 }
 
 evaluate_collection :: proc(
@@ -322,11 +384,21 @@ evaluate :: proc(
 		return evaluate_call(interpreter, t)
 	case Subscript_Node:
 		return evaluate_subscript(interpreter, t)
+	case Variable_Node:
+		return evaluate_variable_decl(interpreter, t)
+	case Return_Node:
+		return evaluate_return(interpreter, t)
+	case Block:
+		return evaluate_block(interpreter, t)
+	case Function_Node:
+		return evaluate_function_declaration(interpreter, t)
+	case If_Node:
+		return evaluate_if(interpreter, t)
+	case Assignment_Node:
+		return evaluate_assignment(interpreter, t)
 	case:
-		panic("Untyped node made it into execution. Was type checking skipped?")
+		panic("Unknown node type")
 	}
-
-	unreachable()
 }
 
 evaluate_subscript :: proc(
@@ -336,7 +408,7 @@ evaluate_subscript :: proc(
 	_res: Value,
 	_err: Runtime_Propagator,
 ) {
-	source_value :=evaluate(interpreter, node.operand^) or_return
+	source_value := evaluate(interpreter, node.operand^) or_return
 	source, is_collection := source_value.(Collection)
 
 	if !is_collection {
@@ -351,10 +423,7 @@ evaluate_subscript :: proc(
 	}
 
 	if index < 0 || index >= i64(len(source.body)) {
-		return {}, Runtime_Error{
-			type = .Index_Out_Of_Bounds_Error,
-			message = fmt.tprintf("Index %d is not between 0 and %d", index, len(source.body))
-		}
+		return {}, Runtime_Error{type = .Index_Out_Of_Bounds_Error, message = fmt.tprintf("Index %d is not between 0 and %d", index, len(source.body))}
 	}
 
 	return source.body[index], nil
@@ -424,11 +493,11 @@ call :: proc(
 	defer end_scope(interpreter)
 
 	for arg, i in arguments {
-		define(interpreter.current_scope, callee.definition.parameters[i].str, arg)
+		define(interpreter.current_scope, callee.definition.parameters[i].str, arg) or_return
 	}
-
-	for statement in callee.definition.body {
-		propagated := execute_statement(interpreter, statement^)
+ 
+	for expr in callee.definition.body {
+		_, propagated := evaluate(interpreter, expr^)
 		if val, is_return := propagated.(Runtime_Return); is_return {
 			return val.value, nil
 		} else if propagated != nil {

@@ -38,11 +38,11 @@ main :: proc(){
         print_parser_error(parser_error.?)
         os.exit(1)
     }
-
     if options.print_ast {
         print_tree(parser.root)
     }
     
+
     runtime_error := execute(parser.root)
 
     if runtime_error != nil {

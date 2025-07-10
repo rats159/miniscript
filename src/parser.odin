@@ -7,8 +7,7 @@ import "core:strconv"
 Parser_Error_Type :: enum {
 	Unexpected_EOF,
 	Unexpected_Token,
-	Not_A_Statement,
-	Invalid_Statement,
+	Invalid_Body,
 }
 
 Parser_Error :: struct {
@@ -18,7 +17,7 @@ Parser_Error :: struct {
 }
 
 Program_Node :: struct {
-	body: []^Statement_Node,
+	body: []^Expression_Node,
 }
 
 Collection_Literal_Node :: struct {
@@ -27,7 +26,7 @@ Collection_Literal_Node :: struct {
 
 Subscript_Node :: struct {
 	operand: ^Expression_Node,
-	indexer: ^Expression_Node
+	indexer: ^Expression_Node,
 }
 
 Expression_Node :: union {
@@ -52,6 +51,13 @@ Expression_Node :: union {
 	Variable_Read_Node,
 	Call_Node,
 	Subscript_Node,
+	//
+	Variable_Node,
+	Return_Node,
+	Block,
+	Function_Node,
+	If_Node,
+	Assignment_Node,
 }
 
 Binary_Op_Node :: struct {
@@ -100,32 +106,18 @@ Call_Node :: struct {
 	arguments: []^Expression_Node,
 }
 
-Statement_Node :: union {
-	Variable_Node,
-	Assignment_Node,
-	If_Node,
-	Void_Node,
-	Function_Node,
-	Block_Statement,
-	Return_Node,
-}
-
 Return_Node :: struct {
 	value: ^Expression_Node,
 }
 
-Block_Statement :: struct {
-	body: []^Statement_Node,
+Block :: struct {
+	body: []^Expression_Node,
 }
 
 Function_Node :: struct {
 	name:       Token,
 	parameters: []Token,
-	body:       []^Statement_Node,
-}
-
-Void_Node :: struct {
-	expr: ^Expression_Node,
+	body:       []^Expression_Node,
 }
 
 Variable_Node :: struct {
@@ -134,14 +126,14 @@ Variable_Node :: struct {
 }
 
 Assignment_Node :: struct {
-	name:  string,
+	assignee:  ^Expression_Node,
 	value: ^Expression_Node,
 }
 
 If_Node :: struct {
 	condition: ^Expression_Node,
-	body:      ^Statement_Node,
-	else_body: Maybe(^Statement_Node),
+	body:      ^Expression_Node,
+	else_body: Maybe(^Expression_Node),
 }
 
 
@@ -173,88 +165,57 @@ parse :: proc(tokens: []Token) -> (_parser: Parser, _err: Maybe(Parser_Error)) {
 }
 
 @(private = "file")
-parse_program :: proc(parser: ^Parser) -> (_expr: []^Statement_Node, _err: Maybe(Parser_Error)) {
-	statements := [dynamic]^Statement_Node{}
+parse_program :: proc(parser: ^Parser) -> (_expr: []^Expression_Node, _err: Maybe(Parser_Error)) {
+	exprs := [dynamic]^Expression_Node{}
 
 	for !parser_done(parser) {
-		append(&statements, parse_statement(parser) or_return)
-	}
-
-	return statements[:], nil
-}
-
-@(private = "file")
-parse_statement :: proc(parser: ^Parser) -> (_expr: ^Statement_Node, _err: Maybe(Parser_Error)) {
-
-	if match(parser, .Var) or_return {
-		return parse_variable(parser)
-	}
-
-	if match(parser, .Function) or_return {
-		return parse_function(parser)
-	}
-
-	if match(parser, .Tilde) or_return {
-		expr := parse_expression(parser) or_return
-		node := new(Statement_Node)
-		node ^= Void_Node {expr}
+		append(&exprs, parse_expression(parser) or_return)
 		_ = expect(parser, .Semicolon) or_return
-		return node, nil
 	}
 
-	if (peek(parser) or_return).type == .Identifier {
-		return parse_assignment(parser)
-	}
-
-	if match(parser, .If) or_return {
-		return parse_if(parser)
-	}
-
-	if match(parser, .Open_Curly) or_return {
-		return parse_block(parser)
-	}
-
-	if match(parser, .Return) or_return {
-		return parse_return(parser)
-	}
-
-	return nil, Parser_Error {
-		type = .Not_A_Statement,
-		token = peek(parser) or_return,
-		message = fmt.tprintf(
-			"Token '%s' does not begin a statement",
-			(peek(parser) or_return).str,
-		),
-	}
+	return exprs[:], nil
 }
 
-parse_return :: proc(parser: ^Parser) -> (_stmt: ^Statement_Node, _err: Maybe(Parser_Error)) {
+// @(private = "file")
+// parse_statement :: proc(parser: ^Parser) -> (_expr: ^Expression_Node, _err: Maybe(Parser_Error)) {
+
+// 	return nil, Parser_Error {
+// 		type = .Not_A_Statement,
+// 		token = peek(parser) or_return,
+// 		message = fmt.tprintf(
+// 			"Token '%s' does not begin a statement",
+// 			(peek(parser) or_return).str,
+// 		),
+// 	}
+// }
+
+parse_return :: proc(parser: ^Parser) -> (_stmt: ^Expression_Node, _err: Maybe(Parser_Error)) {
 	expr := parse_expression(parser) or_return
-	node := new(Statement_Node)
+	node := new(Expression_Node)
 	node^ = Return_Node {
 		value = expr,
 	}
 
-	_ = expect(parser, .Semicolon) or_return
-
 	return node, nil
 }
 
-parse_block :: proc(parser: ^Parser) -> (_stmt: ^Statement_Node, _err: Maybe(Parser_Error)) {
-	body := [dynamic]^Statement_Node{}
+parse_block :: proc(parser: ^Parser) -> (_stmt: ^Expression_Node, _err: Maybe(Parser_Error)) {
+	body := [dynamic]^Expression_Node{}
+	
 	for !(match(parser, .Close_Curly) or_return) {
-		append(&body, parse_statement(parser) or_return)
+		append(&body, parse_expression(parser) or_return)
+		_ = expect(parser, .Semicolon) or_return
 	}
 
-	node := new(Statement_Node)
-	node^ = Block_Statement {
+	node := new(Expression_Node)
+	node^ = Block {
 		body = body[:],
 	}
 
 	return node, nil
 }
 
-parse_function :: proc(parser: ^Parser) -> (_stmt: ^Statement_Node, _err: Maybe(Parser_Error)) {
+parse_function :: proc(parser: ^Parser) -> (_stmt: ^Expression_Node, _err: Maybe(Parser_Error)) {
 	name := expect(parser, .Identifier) or_return
 	_ = expect(parser, .Open_Paren) or_return
 
@@ -273,13 +234,14 @@ parse_function :: proc(parser: ^Parser) -> (_stmt: ^Statement_Node, _err: Maybe(
 	_ = expect(parser, .Close_Paren) or_return
 	_ = expect(parser, .Open_Curly) or_return
 
-	body := [dynamic]^Statement_Node{}
+	body := [dynamic]^Expression_Node{}
 
 	for !(match(parser, .Close_Curly) or_return) {
-		append(&body, parse_statement(parser) or_return)
+		append(&body, parse_expression(parser) or_return)
+		_ = expect(parser, .Semicolon) or_return
 	}
 
-	node := new(Statement_Node)
+	node := new(Expression_Node)
 	node^ = Function_Node {
 		name       = name,
 		parameters = parameters[:],
@@ -289,21 +251,21 @@ parse_function :: proc(parser: ^Parser) -> (_stmt: ^Statement_Node, _err: Maybe(
 	return node, nil
 }
 
-parse_if :: proc(parser: ^Parser) -> (_stmt: ^Statement_Node, _err: Maybe(Parser_Error)) {
+parse_if :: proc(parser: ^Parser) -> (_stmt: ^Expression_Node, _err: Maybe(Parser_Error)) {
 	condition := parse_expression(parser) or_return
 	next := peek(parser) or_return
 	if !is_valid_after_if(next.type) {
-		return {}, Parser_Error{type = .Invalid_Statement, token = next, message = fmt.aprintf("%s is not a valid if statement body", next.type)}
+		return {}, Parser_Error{type = .Invalid_Body, token = next, message = fmt.aprintf("%s is not a valid if expression body", next.type)}
 	}
 
-	body := parse_statement(parser) or_return
+	body := parse_expression(parser) or_return
 
-	else_body: Maybe(^Statement_Node) = nil
+	else_body: Maybe(^Expression_Node) = nil
 	if match(parser, .Else) or_return {
-		else_body = parse_statement(parser) or_return
+		else_body = parse_expression(parser) or_return
 	}
 
-	stmt := new(Statement_Node)
+	stmt := new(Expression_Node)
 	stmt^ = If_Node {
 		condition = condition,
 		body      = body,
@@ -318,55 +280,36 @@ is_valid_after_if :: proc(type: TokenType) -> bool {
 }
 
 @(private = "file")
-parse_variable :: proc(parser: ^Parser) -> (_stmt: ^Statement_Node, _err: Maybe(Parser_Error)) {
+parse_variable :: proc(parser: ^Parser) -> (_stmt: ^Expression_Node, _err: Maybe(Parser_Error)) {
 	name := (expect(parser, .Identifier) or_return).str
 	_ = expect(parser, .Equals) or_return
 	expr := parse_expression(parser) or_return
 
-	stmt := new(Statement_Node)
+	stmt := new(Expression_Node)
 	stmt^ = Variable_Node {
 		name  = name,
 		value = expr,
 	}
 
-	_ = expect(parser, .Semicolon) or_return
-
 	return stmt, nil
 }
 
 @(private = "file")
-parse_assignment :: proc(parser: ^Parser) -> (_stmt: ^Statement_Node, _err: Maybe(Parser_Error)) {
-	name := (expect(parser, .Identifier) or_return).str
-	tk := peek(parser) or_return
-	#partial switch tk.type {
-	case .Equals:
-		return parse_standard_assignment(name, parser)
-	case .PlusEquals, .MinusEquals, .StarEquals, .SlashEquals:
-		return parse_operator_assignment(name, parser, tk.type)
-	case:
-		return {}, Parser_Error{type = .Unexpected_Token, message = fmt.aprintf("Expected an assignment token but recieved %s", tk.type), token = tk}
-	}
-	unreachable()
-}
-
-@(private = "file")
 parse_standard_assignment :: proc(
-	name: string,
+	assignee: ^Expression_Node,
 	parser: ^Parser,
 ) -> (
-	_stmt: ^Statement_Node,
+	_stmt: ^Expression_Node,
 	_err: Maybe(Parser_Error),
 ) {
 	_ = expect(parser, .Equals) or_return
 	expr := parse_expression(parser) or_return
 
-	stmt := new(Statement_Node)
+	stmt := new(Expression_Node)
 	stmt^ = Assignment_Node {
-		name  = name,
+		assignee  = assignee,
 		value = expr,
 	}
-
-	_ = expect(parser, .Semicolon) or_return
 
 	return stmt, nil
 }
@@ -374,66 +317,95 @@ parse_standard_assignment :: proc(
 
 @(private = "file")
 parse_operator_assignment :: proc(
-	name: string,
+	assignee: ^Expression_Node,
 	parser: ^Parser,
 	type: TokenType,
 ) -> (
-	_stmt: ^Statement_Node,
+	_stmt: ^Expression_Node,
 	_err: Maybe(Parser_Error),
 ) {
 	advance(parser) or_return
 	expr := parse_expression(parser) or_return
 
 	operation := new(Expression_Node)
-	read := new(Expression_Node)
-	read^ = Variable_Read_Node {
-		name = name,
-	}
 
 	#partial switch type {
 	case .PlusEquals:
 		operation^ = Add_Node {
-			left  = read,
+			left  = assignee,
 			right = expr,
 		}
 	case .MinusEquals:
 		operation^ = Subtract_Node {
-			left  = read,
+			left  = assignee,
 			right = expr,
 		}
 	case .StarEquals:
 		operation^ = Multiply_Node {
-			left  = read,
+			left  = assignee,
 			right = expr,
 		}
 	case .SlashEquals:
 		operation^ = Divide_Node {
-			left  = read,
+			left  = assignee,
 			right = expr,
 		}
 	case:
-		unreachable()
+		panic("Theoretically unreachable operator assignment")
 	}
-
-	stmt := new(Statement_Node)
+ 
+	stmt := new(Expression_Node)
 	stmt^ = Assignment_Node {
-		name  = name,
+		assignee  = assignee,
 		value = operation,
 	}
-
-	_ = expect(parser, .Semicolon) or_return
 
 	return stmt, nil
 }
 
 @(private = "file")
 parse_expression :: proc(parser: ^Parser) -> (_expr: ^Expression_Node, _err: Maybe(Parser_Error)) {
+	if match(parser, .Var) or_return {
+		return parse_variable(parser)
+	}
+
+	if match(parser, .Function) or_return {
+		return parse_function(parser)
+	}
+
+	if match(parser, .If) or_return {
+		return parse_if(parser)
+	}
+
+	if match(parser, .Open_Curly) or_return {
+		return parse_block(parser)
+	}
+
+	if match(parser, .Return) or_return {
+		return parse_return(parser)
+	}
 	if match(parser, .Open_Bracket) or_return {
 		return parse_collection(parser)
 	}
-	expr := parse_comparison(parser) or_return
+	expr := parse_assignment(parser) or_return 
 
 	return expr, nil
+}
+
+@(private = "file")
+parse_assignment :: proc(parser: ^Parser) -> (_expr: ^Expression_Node, _err: Maybe(Parser_Error)) {
+	assignee := parse_comparison(parser) or_return
+
+	tk := peek(parser) or_return
+	
+	#partial switch tk.type {
+	case .Equals:
+		return parse_standard_assignment(assignee, parser)
+	case .PlusEquals, .MinusEquals, .StarEquals, .SlashEquals:
+		return parse_operator_assignment(assignee, parser, tk.type)
+	case:
+		return assignee, nil
+	}
 }
 
 @(private = "file")
@@ -466,7 +438,7 @@ parse_comparison :: proc(parser: ^Parser) -> (_expr: ^Expression_Node, _err: May
 	   operator.type != .Greater &&
 	   operator.type != .LessEquals &&
 	   operator.type != .GreaterEquals &&
-	   operator.type != .Equals {
+	   operator.type != .EqualsEquals {
 		return left, nil
 	}
 
@@ -497,13 +469,13 @@ parse_comparison :: proc(parser: ^Parser) -> (_expr: ^Expression_Node, _err: May
 			left  = left,
 			right = right,
 		}
-	case .Equals:
+	case .EqualsEquals:
 		expr^ = Equality_Node {
 			left  = left,
 			right = right,
 		}
 	case:
-		unreachable()
+		panic("Theoretically unreachable comparison")
 	}
 
 	return expr, nil
@@ -544,7 +516,7 @@ parse_add :: proc(parser: ^Parser) -> (_expr: ^Expression_Node, _err: Maybe(Pars
 		return expr, nil
 	}
 
-	unreachable()
+	panic("Theoretically unreachable add-precedence operator")
 }
 
 @(private = "file")
@@ -581,7 +553,7 @@ parse_mult :: proc(parser: ^Parser) -> (_expr: ^Expression_Node, _err: Maybe(Par
 		return expr, nil
 	}
 
-	unreachable()
+	panic("Theoretically unreachable mult-precedence operator")
 }
 
 @(private = "file")
@@ -636,7 +608,7 @@ parse_subscript :: proc(
 	_ = expect(parser, .Close_Bracket) or_return
 	call := new(Expression_Node)
 	call^ = Subscript_Node {
-		operand    = operand,
+		operand = operand,
 		indexer = indexer,
 	}
 	return call, nil
